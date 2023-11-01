@@ -3,25 +3,46 @@ package proxy
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"io"
+	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 )
 
-func helloHandler(w http.ResponseWriter, r *http.Request) {
-	io.WriteString(w, "Hello, world!\n")
-	log.Println(r.TLS.PeerCertificates)
-	for _, c := range r.TLS.PeerCertificates {
-		log.Println(*&c.Subject)
+func echoCertificateDataHandler(w http.ResponseWriter, r *http.Request) {
+	if len(r.TLS.PeerCertificates) > 0 {
+		fmt.Fprintf(w, "CN=%s\n", r.TLS.PeerCertificates[0].Subject.CommonName)
+	} else {
+		fmt.Fprintf(w, "No cert")
 	}
-
-	log.Println(r.TLS)
-
+	//	for _, c := range r.TLS.PeerCertificates {
+	//		log.Println(c.Subject)
+	//	}
 }
 
 func Proxy() {
-	http.HandleFunc("/hello", helloHandler)
+
+	remote, err := url.Parse("http://google.com")
+	if err != nil {
+		panic(err)
+	}
+
+	handler := func(p *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			log.Println(r.URL)
+			r.Host = remote.Host
+			w.Header().Set("X-Ben", "Rad")
+			p.ServeHTTP(w, r)
+		}
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(remote)
+
+	// setup handlers and proxy
+	http.HandleFunc("/", handler(proxy))
+	http.HandleFunc("/echo", echoCertificateDataHandler)
 	log.Println("Starting up")
 
 	caCert, err := os.ReadFile("icpcerts/chain.pem")
