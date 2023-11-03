@@ -10,9 +10,12 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+
+	httplogger "github.com/gleicon/go-httplogger"
 )
 
 type ProxyServer struct {
+	addr              string
 	port              string
 	upstream          string
 	certFile          string
@@ -21,8 +24,9 @@ type ProxyServer struct {
 	echoHandlerActive bool
 }
 
-func NewProxyServer(port string, upstream, certFile, keyFile, caCert string, echoHandlerActive bool) *ProxyServer {
+func NewProxyServer(addr, port, upstream, certFile, keyFile, caCert string, echoHandlerActive bool) *ProxyServer {
 	ps := ProxyServer{
+		addr,
 		port,
 		upstream,
 		certFile,
@@ -60,7 +64,6 @@ func (ps *ProxyServer) setupProxyHandler() func(http.ResponseWriter, *http.Reque
 
 	handler := func(p *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
-			log.Println(r.URL)
 			r.Host = remote.Host
 			p.ServeHTTP(w, r)
 		}
@@ -85,22 +88,29 @@ func (ps *ProxyServer) setupProxyHandler() func(http.ResponseWriter, *http.Reque
 
 func (ps *ProxyServer) Serve() {
 
+	serveMux := http.NewServeMux()
 	proxyHandler := ps.setupProxyHandler()
-	http.HandleFunc("/", proxyHandler)
 
-	// optional echo handler
+	serveMux.HandleFunc("/", proxyHandler)
+
+	// install echo handler if enabled
 	if ps.echoHandlerActive {
-		http.HandleFunc("/echo", ps.echoCertificateDataHandler)
+		serveMux.HandleFunc("/echo", ps.echoCertificateDataHandler)
 	}
 
-	log.Println("Proxy Server Starting up !")
+	log.Println("Reverse Proxy Server Starting up")
+	log.Printf("Upstream: %s\n", ps.upstream)
 
 	caCert, err := os.ReadFile(ps.caCert)
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
+
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		log.Fatal("Failed loading Cert Pool")
+	}
 
 	tlsConfig := &tls.Config{
 		ClientCAs:  caCertPool,
@@ -108,8 +118,9 @@ func (ps *ProxyServer) Serve() {
 	}
 
 	server := &http.Server{
-		Addr:      ":" + ps.port,
+		Addr:      ps.addr + ":" + ps.port,
 		TLSConfig: tlsConfig,
+		Handler:   httplogger.HTTPLogger(serveMux),
 	}
 
 	log.Fatal(server.ListenAndServeTLS(ps.certFile, ps.keyFile))
